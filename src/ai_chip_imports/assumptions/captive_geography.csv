@@ -1,0 +1,28 @@
+model,designer,destination,eligible,eligible_from,api_since,basis,note
+TPU v4,Google,United States,1,,,assumption,v4 pods are US-only (no non-US region exposes v4)
+TPU v4i,Google,United States,1,,,assumption,inference chip; US-only
+TPU v5p,Google,United States,1,,,docs,all US regions
+TPU v5p,Google,European Union,1,,,docs + API,"Eemshaven/Middenmeer NL (europe-west4, docs); St. Ghislain BE (europe-west1, API only)"
+TPU v5e,Google,United States,1,,,docs,all US regions
+TPU v5e,Google,European Union,1,,,docs + API,"Eemshaven/Middenmeer NL (docs); St. Ghislain BE, Hamina FI (europe-north1), Frankfurt DE (europe-west3, presumed leased) -- API only"
+TPU v5e,Google,Japan,1,,2025-09,API,"Inzai (asia-northeast1); v5e in the API since Sep 2025. eligible_from left blank: hardware is installed before a region goes live"
+TPU v5e,Google,Chile,1,,2025-09,API,"Quilicura (southamerica-west1); v5e in the API since Sep 2025"
+TPU v5e,Google,Singapore,1,,,API,Jurong West (asia-southeast1)
+TPU v5e,Google,Canada,1,,,API,"Montreal (northamerica-northeast1), presumed leased"
+TPU v6e,Google,United States,1,,,docs,all US regions
+TPU v6e,Google,European Union,1,,,docs,Eemshaven/Middenmeer NL (europe-west4)
+TPU v6e,Google,Japan,1,,,docs,Inzai (asia-northeast1)
+TPU v6e,Google,Chile,1,,,docs,Quilicura (southamerica-west1)
+TPU v6e,Google,Singapore,1,,,API,Jurong West (asia-southeast1)
+TPU v6e,Google,India,1,,,API,"Mumbai (asia-south1), presumed leased"
+TPU v6e,Google,Brazil,1,,,API,"Sao Paulo / Osasco (southamerica-east1), presumed leased"
+TPU v7,Google,United States,1,,,assumption,Ironwood; no non-US region exposed as of 2026-09
+TPU v8i,Google,United States,1,,,assumption,"no region data as of 2026-10; US-only placeholder"
+TPU v5e,Google,Taiwan,0,,2025-04,docs,"Changhua (asia-east1); NOT a destination in the estimate: Taiwan-made chips kept in Taiwan never cross a border (customs-invisible), so the units land on the visible destinations"
+TPU v6e,Google,Taiwan,0,,2025-04,docs,"Changhua (asia-east1); same as above"
+all TPU,Google,United Kingdom,0,,,API survey,"Waltham Cross (europe-west2) has never exposed a TPU type to the API; possibly internal use -- excluded"
+all TPU,Google,"China / Hong Kong / Macau",0,,,assumption,captive silicon never reaches the export-controlled destinations
+Trainium1,Amazon,United States,1,,,AWS announcements,"Trn1: us-east-1, us-west-2 (GA 2022-10), us-east-2 (2023-08); no non-US region"
+Trainium2,Amazon,United States,1,,,AWS announcements,"Trn2: us-east-2 (GA 2024-12, Capacity Blocks); Project Rainier (Indiana)"
+Trainium3,Amazon,United States,1,,,assumption,no non-US region announced
+all Trainium,Amazon,"China / Hong Kong / Macau",0,,,assumption,captive silicon never reaches the export-controlled destinations

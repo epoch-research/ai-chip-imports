@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-chip-imports"
+version = "1.0.0"
+description = "Estimate where AI accelerators arrive, from national customs records and Epoch AI's Chip Sales data."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "Epoch AI" }]
+dependencies = [
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "xlrd>=2.0.1",   # Taiwan's portal exports are BIFF .xls
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://epoch.ai/data/ai-chip-imports"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ai_chip_imports = ["assumptions/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E731"]

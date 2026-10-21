@@ -1,0 +1,5 @@
+# Exact versions that reproduce published runs byte for byte. Newer versions should give the
+# same results up to floating-point rounding.
+numpy==2.5.3
+pandas==3.0.5
+xlrd==2.0.2

@@ -416,9 +416,7 @@ class ContentModel:
             native_codes = sorted({c for d, c in NATIVE_TIERS if d == dest})
             path = sorted(glob.glob(os.path.join(books.CUSTOMS_DIR, repdir, "clean",
                                                  f"{repdir}_T1-T2_*.csv")))[-1]
-            df = pd.read_csv(path, usecols=["flow", "partner", "code_native", "code_hs6",
-                                            "period", "value_usd"],
-                             dtype={"code_hs6": str, "code_native": str})
+            df = self._read_native(path)
             d = df[(df["flow"] == "M") & df["code_hs6"].isin(native_codes)
                    & (df["code_native"].str.len() > 6)].copy()
             d = d[~d["partner"].map(books.NORM).isin({"world", "total"})]
@@ -465,6 +463,12 @@ class ContentModel:
         self._native_monthly_frame = pd.concat(monthly_frames, ignore_index=True).merge(
             nv[["dest", "code_hs6", "code_native", "q", "c_line"]],
             on=["dest", "code_hs6", "code_native", "q"], validate="many_to_one")
+
+    @staticmethod
+    def _read_native(path):
+        """A book's clean CSV with its native lines (the columns ``_native_cells`` needs)."""
+        return pd.read_csv(path, usecols=["flow", "partner", "code_native", "code_hs6", "period", "value_usd"],
+                           dtype={"code_hs6": str, "code_native": str})
 
     # --- the cell classifier -------------------------------------------------------------------
     def _cell_rows(self, res, dest, code, cn_excluded):

@@ -2,4 +2,5 @@
 # same results up to floating-point rounding.
 numpy==2.5.3
 pandas==3.0.5
+scipy==1.18.1
 xlrd==2.0.2

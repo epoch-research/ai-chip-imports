@@ -17,7 +17,12 @@ Inputs (``data/external/baseline_2021/``, built by ``ai_chip_imports.prepare.his
   used for the residual bucket's reference and ledger warm-up only.
 
 Historical rows enter netting only; the content classification keeps its own observations.
+
+``AI_CHIP_IMPORTS_REFERENCE_YEAR=2022`` selects the earlier basis instead, kept as a structural
+case of the uncertainty run: the 2022 monthly mean as the reference, less an A100-era AI carve
+(Epoch's 2022 sales, see ``estimator.carve_2022``), with no 2021 rows anywhere.
 """
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -25,6 +30,10 @@ import pandas as pd
 
 from . import paths
 
+REFERENCE_YEAR = int(os.environ.get("AI_CHIP_IMPORTS_REFERENCE_YEAR", "2021"))
+if REFERENCE_YEAR not in (2021, 2022):
+    raise ValueError("AI_CHIP_IMPORTS_REFERENCE_YEAR must be 2021 or 2022")
+ENABLED = REFERENCE_YEAR == 2021    # the 2021 history is attached
 INPUT = paths.EXTERNAL_DIR / "baseline_2021"
 # Reporters whose import rows the 2021 pack holds as FOB-type values. Australia's Comtrade value
 # is CIF but the pack was prepared treating it as FOB, so its rows are put on the FOB basis on

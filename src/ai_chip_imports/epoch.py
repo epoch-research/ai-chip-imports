@@ -101,10 +101,10 @@ def quarterly_sales(t):
     return g.sort_values("quarter")
 
 
-def models_by_arrival_quarter():
-    """Every designer's sales per model, moved to calendar arrival quarters.
+def models_by_sales_quarter():
+    """Every designer's sales per model, in Epoch's reported sales quarters.
 
-    One row per model x arrival quarter with units, H100e and their 5th/95th percentiles, cost
+    One row per model x sales quarter with units, H100e and their 5th/95th percentiles, cost
     and ASP, the designer, ``cn_spec`` (models Epoch flags as primarily for the Chinese market)
     and the allocation ``pool``: ``cn_domestic`` (China-fabricated), ``cn_spec``, or ``row``.
     The model key is ``Chip type (linked)``, which joins ``chip_types.csv`` exactly. Row-level
@@ -138,4 +138,9 @@ def models_by_arrival_quarter():
     g["cn_spec"] = g["model"].isin(cn_spec)
     g["pool"] = np.where(g["designer"].isin(CN_DOMESTIC_DESIGNERS), "cn_domestic",
                          np.where(g["cn_spec"], "cn_spec", "row"))
-    return timing.arrival_models(g)
+    return g
+
+
+def models_by_arrival_quarter():
+    """``models_by_sales_quarter`` moved to calendar arrival quarters (``timing.arrival_models``)."""
+    return timing.arrival_models(models_by_sales_quarter())

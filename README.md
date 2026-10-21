@@ -77,7 +77,7 @@ uncertainty section quantifies them):
 | Assumption | Adopted value | Where |
 |---|---|---|
 | Accelerator content of ambiguous trade (boards and parts in 8473.30, other units in 8471.80) | unit-value ladder and $/kg ramps, national tariff lines first | `content.py`: `LOW_MAX`…`SERVER_LO`, `CELL_DENS`, `TIER_C` |
-| Ordinary-trade baseline | 2021 trade, indexed by client IT for systems and by a non-AI-origin component index for boards | `baseline.py`, `history.py` |
+| Ordinary-trade baseline | 2021 trade, indexed by client IT for systems and by a non-AI-origin component index for boards | `baseline.py`, `history.py`; `AI_CHIP_IMPORTS_REFERENCE_YEAR` (2022: the earlier 2022 reference) |
 | Imported content of re-exported servers (k) | 0.10 / 0.40 / 0.90 at 250 / 600 / 2,000 $/kg | `netting.py`: `K_DENS_ANCH`, `K_UV_ANCH` |
 | Sales-to-arrival lag | 2 months | `timing.py`; `AI_CHIP_IMPORTS_LAG_MONTHS` |
 | Malaysia server-gap deduction | 50% of the China–Malaysia server mirror gap | `netting.py`; `AI_CHIP_IMPORTS_MALAYSIA_MIRROR_SHARE` |
@@ -85,9 +85,25 @@ uncertainty section quantifies them):
 | Where captive chips (TPU, Trainium) are deployed | destination countries per chip model | `assumptions/captive_geography.csv` |
 | Netting memory | 2 quarters | `ledger.py`; `AI_CHIP_IMPORTS_NETTING_QUARTERS` |
 
-The three environment variables override their defaults for sensitivity runs; the defaults
-reproduce the published estimates. Two more set the paths: `AI_CHIP_IMPORTS_DATA` (input root,
-default `./data`) and `AI_CHIP_IMPORTS_OUTPUT` (default `./output`).
+The four environment variables override their defaults for sensitivity runs; the defaults are
+the published method. Two more set the paths: `AI_CHIP_IMPORTS_DATA` (input root, default
+`./data`) and `AI_CHIP_IMPORTS_OUTPUT` (default `./output`).
+
+## Uncertainty
+
+`ai_chip_imports.uncertainty` computes the ranges published with the estimates. It reruns the
+whole pipeline under random draws of the parameters and of Epoch's sales, within 144 structural
+cases that read the trade differently. The conditional 90% interval comes from the central
+case; the structural envelope spans every case.
+
+```bash
+python -m ai_chip_imports.uncertainty prepare
+python -m ai_chip_imports.uncertainty probe
+python -m ai_chip_imports.uncertainty run --samples 64 --workers 6    # about a day on six cores
+python -m ai_chip_imports.uncertainty report
+```
+
+[docs/uncertainty.md](docs/uncertainty.md) describes the run, its outputs and how to read them.
 
 ## Reproducibility
 
@@ -117,7 +133,8 @@ src/ai_chip_imports/
 ├── timing.py           arrival-quarter conventions
 ├── estimator.py        chip dollars per destination, compared with Epoch
 ├── allocator.py        Epoch's units distributed across destinations
-└── compare.py          output comparison between runs
+├── compare.py          output comparison between runs
+└── uncertainty/        parameter and sales draws within structural cases
 tests/                  unit tests (synthetic data)
 ```
 

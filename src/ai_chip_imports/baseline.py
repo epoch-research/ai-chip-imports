@@ -171,15 +171,18 @@ _NAT_LEVELS = {}
 FRONTIER = None     # the trade frame's last month (set by estimator.build_universe)
 
 
-def _national_origin_levels():
+def _national_origin_levels(overrides=None):
     """{(reporter id, code): monthly non-AI-origin level} from the national books, used to
     extend the Comtrade levels. Cached per frontier. Each book is cut at the trade frame's
     frontier ``FRONTIER`` (when set) so the extension ends where the trade data end; the per-cell
-    exclusions match the Comtrade part of the spliced series."""
+    exclusions (``overrides``, default PLACEBO_ORIGIN_OVERRIDES) match the Comtrade part of the
+    spliced series."""
     from . import books
+    overrides = PLACEBO_ORIGIN_OVERRIDES if overrides is None else overrides
     frontier = FRONTIER
-    if frontier in _NAT_LEVELS:
-        return _NAT_LEVELS[frontier]
+    key = (frontier, frozenset(overrides.items()))
+    if key in _NAT_LEVELS:
+        return _NAT_LEVELS[key]
     out = {}
     for rep, leg in NATIONAL_LEG.items():
         path = books.find_national_csv(leg)
@@ -195,12 +198,12 @@ def _national_origin_levels():
             continue
         d["pnorm"] = d["partner"].map(books.NORM).map(_norm)
         for code in ORIGIN_IDX:
-            excl = PLACEBO_ORIGIN_OVERRIDES.get((rep, code), AI_ORIGIN_NORMS)
+            excl = overrides.get((rep, code), AI_ORIGIN_NORMS)
             lvl = (d[(d["code_hs6"] == code) & ~d["pnorm"].isin(excl)]
                    .groupby("period")["value_usd"].sum())
             if not lvl.empty:
                 out[(rep, code)] = lvl
-    _NAT_LEVELS[frontier] = out
+    _NAT_LEVELS[key] = out
     return out
 
 
@@ -228,22 +231,35 @@ def _splice(base, ext, rep, code, verbose=True):
     return pd.concat([base, tail * ratio]).sort_index()
 
 
+REFERENCES = ("adopted", "client_it_boards", "flat_systems")
+
+
 class BaselineIndex:
     """Measured non-AI index per destination x code (2022 mean = 1).
 
     ``factor(dest, code)`` -> monthly factor Series, or None. ``lookup`` vectorizes it with a
     fallback (the world composite once ``set_composite`` has run, else the caller's parametric
     factors).
+
+    ``reference`` selects the construction: ``adopted`` (systems follow the client-IT index,
+    boards the non-AI-origin index), or one of two structural alternatives used by the
+    uncertainty run -- ``client_it_boards`` (boards follow the destination's client-IT index
+    too) and ``flat_systems`` (the systems codes held at their reference level).
+    ``origin_overrides`` replaces PLACEBO_ORIGIN_OVERRIDES (``{}`` drops every exception).
     """
 
-    def __init__(self, idx_dir=IDX_DIR, verbose=True):
+    def __init__(self, idx_dir=IDX_DIR, verbose=True, reference="adopted", origin_overrides=None):
+        if reference not in REFERENCES:
+            raise ValueError(f"unknown baseline reference {reference!r}")
+        self.reference = reference
+        overrides = PLACEBO_ORIGIN_OVERRIDES if origin_overrides is None else origin_overrides
         self.raw = _load_files(idx_dir)
         self.levels = {}    # (dest, code) -> raw monthly $ level
         self.idx = {}       # (dest, code) -> factor series
         self.fallbacks = set()
         self.composite = None            # {code: factor series}, the fallback for the rest
         self.composite_fallbacks = set()
-        nat = _national_origin_levels()
+        nat = _national_origin_levels(overrides)
         for rep, dest in REPORTER_DEST.items():
             d = self.raw[self.raw["rep_id"] == rep]
             if d.empty:
@@ -263,20 +279,28 @@ class BaselineIndex:
             for code in SYSTEMS_IDX:
                 self._add(dest, code, sys_lvl)
             for code in ORIGIN_IDX:
-                excl = PLACEBO_ORIGIN_OVERRIDES.get((rep, code), AI_ORIGIN_NORMS)
+                excl = overrides.get((rep, code), AI_ORIGIN_NORMS)
                 lvl = (d[(d["code_hs6"] == code) & ~d["pnorm"].isin(excl)]
                        .groupby("period")["value_usd"].sum())
                 if (rep, code) in nat:
                     lvl = _splice(lvl, nat[(rep, code)], rep, code, verbose=verbose)
                 self._add(dest, code, lvl)
         self._splice_stale(verbose=verbose)
+        if reference == "client_it_boards":
+            for dest, code in list(self.idx):
+                if code == "847330" and (dest, "847150") in self.idx:
+                    self.idx[(dest, code)] = self.idx[(dest, "847150")].copy()
+        elif reference == "flat_systems":
+            for key, f in list(self.idx.items()):
+                if key[1] in SYSTEMS_IDX:
+                    self.idx[key] = pd.Series(1., index=f.index)
         if verbose:
             built = sorted({d for d, _ in self.idx})
             print(f"[baseline-index] {len(self.idx)} (dest, code) indices for {built}")
 
     def _add(self, dest, code, level):
         from . import history
-        if dest == "United Kingdom" and code in history.CODES:
+        if history.ENABLED and dest == "United Kingdom" and code in history.CODES:
             # The UK's 2021 months come from a reconstruction consistent with its EU dispatch
             # records (see prepare.uk_index); origin- and dispatch-based ratios are never mixed.
             patch = pd.read_csv(history.INPUT / "uk_index_2021.csv", index_col="period")

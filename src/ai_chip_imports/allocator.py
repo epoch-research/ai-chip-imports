@@ -134,8 +134,9 @@ def residual_country_split(res, r_code, bindex, cmodel):
     r["dest"] = norm.str.title().map(ledger.clean_thin)
     r = r.groupby(["dest", "code_hs6", "period"], as_index=False)["value_usd"].sum()
     r["value_usd"] = r["value_usd"] * r["code_hs6"].map(lambda c: r_code.get(c, 1.0))
-    r = history.pad_history(r)
-    co = ledger.corridor_chiponly(r, "dest", baseline_index=bindex, historical=True)
+    if history.ENABLED:
+        r = history.pad_history(r)
+    co = ledger.corridor_chiponly(r, "dest", baseline_index=bindex, historical=history.ENABLED)
     w = exporter_content.residual_weights(co, cmodel, res)
     co["chiponly"] = co.excess.to_numpy() * w
     m = co.groupby(["dest", "q"])["chiponly"].sum().unstack("dest").fillna(0.0)

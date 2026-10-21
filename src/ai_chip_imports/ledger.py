@@ -178,7 +178,7 @@ def _ledger_excess(d, dest_col, retrospective=False):
     return xrow * share
 
 
-def corridor_chiponly(df, dest_col, growth=None, baseline_index=None, historical=False):
+def corridor_chiponly(df, dest_col, growth=None, baseline_index=None, historical=False, ai2022=None):
     """Baseline, counted excess and flat-content chip dollars per row of ``df``.
 
     ``df`` needs ``value_usd``, ``period``, ``code_hs6`` and ``dest_col``. ``growth`` overrides
@@ -186,14 +186,20 @@ def corridor_chiponly(df, dest_col, growth=None, baseline_index=None, historical
     ``baseline_index`` (a ``baseline.BaselineIndex``) replaces the parametric factor with the
     measured index where one exists. ``historical=True`` anchors the baseline on 2021 (the
     rows must include the 2021 history), uses the retrospective ledger and drops the 2021
-    warm-up rows from the result. Returns the rows with ``baseline``, ``excess``, ``q``,
-    ``chiponly`` (excess x the flat per-code content) and ``dest_col`` renamed to ``dest``.
+    warm-up rows from the result. On the 2022 reference, ``ai2022`` ({code: $/month}) carves
+    the AI content of 2022 out of the 2022 means, split across destinations by their share of
+    the code's 2022 mean. Returns the rows with ``baseline``, ``excess``, ``q``, ``chiponly``
+    (excess x the flat per-code content) and ``dest_col`` renamed to ``dest``.
     """
     growth = growth or codes.NONAI_GROWTH
     d = df[df["code_hs6"].isin(codes.BASKET)].copy()
     d["year"] = d["period"].str[:4]
     b = (d[d["year"] == "2022"].groupby([dest_col, "code_hs6"])["value_usd"].mean()
          .rename("mean2022").reset_index())
+    if ai2022:
+        tot = b.groupby("code_hs6")["mean2022"].transform("sum")
+        b["ai2022_d"] = (b["code_hs6"].map(ai2022).fillna(0.0)
+                         * np.where(tot > 0, b["mean2022"] / tot, 0.0))
     d = d.merge(b, on=[dest_col, "code_hs6"], how="left")
     d["mean2022"] = d["mean2022"].fillna(0.0)          # a corridor new after 2022 has no floor
     d["g"] = d["code_hs6"].map(lambda c: growth[codes.channel(c)])
@@ -201,7 +207,11 @@ def corridor_chiponly(df, dest_col, growth=None, baseline_index=None, historical
     if baseline_index is not None:
         d = d.reset_index(drop=True)
         d["gf"] = baseline_index.lookup(d[dest_col], d["code_hs6"], d["period"], d["gf"])
-    d["baseline"] = d["mean2022"].clip(lower=0.0) * d["gf"]
+    if ai2022:
+        d["ai2022_d"] = d["ai2022_d"].fillna(0.0)
+        d["baseline"] = (d["mean2022"] - d["ai2022_d"]).clip(lower=0.0) * d["gf"]
+    else:
+        d["baseline"] = d["mean2022"].clip(lower=0.0) * d["gf"]
     if historical:
         from .history import override_baselines
         d = override_baselines(d, dest_col, baseline_index)

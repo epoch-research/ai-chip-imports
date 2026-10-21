@@ -19,5 +19,5 @@ atexit.register(shutil.rmtree, _ROOT, ignore_errors=True)
 os.environ["AI_CHIP_IMPORTS_DATA"] = os.path.join(_ROOT, "data")
 os.environ["AI_CHIP_IMPORTS_OUTPUT"] = os.path.join(_ROOT, "output")
 for _name in ("AI_CHIP_IMPORTS_NETTING_QUARTERS", "AI_CHIP_IMPORTS_LAG_MONTHS",
-              "AI_CHIP_IMPORTS_MALAYSIA_MIRROR_SHARE"):
+              "AI_CHIP_IMPORTS_MALAYSIA_MIRROR_SHARE", "AI_CHIP_IMPORTS_REFERENCE_YEAR"):
     os.environ.pop(_name, None)

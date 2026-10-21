@@ -428,12 +428,15 @@ def _un_import_content(cm):
     return f
 
 
-def _un_k_rows(rows, leg, danch, uanch, import_c, import_leg=None):
+def _un_k_rows(rows, leg, danch, uanch, import_c, import_leg=None, k_shift=None):
     """k per own-made export row (the caller zeroes non-server codes).
 
     The row group's (partner x code x quarter) value density, else its unit value; rows with
     neither take the book's value-weighted k where it carries a field on at least half of its
     server exports in the window, and its own import content where it does not.
+    ``k_shift`` (book -> additive shift, for uncertainty draws) moves the server-code k read
+    from the book's own fields, clipped to [0, 1]; k taken from import content is left to the
+    content model.
     """
     from . import content
     if rows.empty:
@@ -455,13 +458,20 @@ def _un_k_rows(rows, leg, danch, uanch, import_c, import_leg=None):
     known = win & k.notna()
     v_win = float(rows.loc[win, "value_usd"].sum())
     v_known = float(rows.loc[known, "value_usd"].sum())
+    il = import_leg or leg
     if v_win > 0 and v_known / v_win >= content.QTYCOV_MIN:
         kbar = float((rows.loc[known, "value_usd"] * k[known]).sum() / v_known)
-        return k.fillna(kbar)
-    il = import_leg or leg
-    fill = pd.Series([import_c(il, c, qq) for c, qq in zip(rows["code_hs6"], q)],
-                     index=rows.index, dtype="float")
-    return k.where(k.notna(), fill)
+        k = k.fillna(kbar)
+        observed = k.notna()
+    else:
+        observed = k.notna()
+        fill = pd.Series([import_c(il, c, qq) for c, qq in zip(rows["code_hs6"], q)],
+                         index=rows.index, dtype="float")
+        k = k.where(observed, fill)
+    if k_shift is not None:
+        shifted = observed & rows["code_hs6"].isin(K_SERVER_CODES)
+        k.loc[shifted] = (k.loc[shifted] + k_shift(il)).clip(0, 1)
+    return k
 
 
 def _un_spread(deductions, Mn):
@@ -524,7 +534,8 @@ def malaysia_server_mirror(res, share=None):
     return months[cols]
 
 
-def _un_leg_rows(res, th, ck, leg, danch, uanch, import_c, book_ledger, mirror_share=None):
+def _un_leg_rows(res, th, ck, leg, danch, uanch, import_c, book_ledger, mirror_share=None,
+                 k_shift=None):
     """One book under the netting rule -> (dest, code_hs6, period, value_usd), plus a ledger row."""
     empty = res.iloc[0:0]
     if leg == "European Union":
@@ -543,7 +554,7 @@ def _un_leg_rows(res, th, ck, leg, danch, uanch, import_c, book_ledger, mirror_s
         full = x.assign(value_usd=x["value_usd"] * rx)
         own = x.assign(value_usd=x["value_usd"] * (1.0 - rx))
         # k is read on the members' unscaled rows (value / kg)
-        k = (pd.concat([_un_k_rows(x[x["rep_c"] == m], m, danch, uanch, import_c, leg)
+        k = (pd.concat([_un_k_rows(x[x["rep_c"] == m], m, danch, uanch, import_c, leg, k_shift)
                         for m in x["rep_c"].unique()]).reindex(own.index)
              if not own.empty else pd.Series(dtype="float"))
     elif leg in ck.leg_rx:
@@ -552,7 +563,7 @@ def _un_leg_rows(res, th, ck, leg, danch, uanch, import_c, book_ledger, mirror_s
         rx = float(ck.leg_rx[leg])
         full = x.assign(value_usd=x["value_usd"] * rx)
         own = x.assign(value_usd=x["value_usd"] * (1.0 - rx))
-        k = _un_k_rows(x, leg, danch, uanch, import_c)
+        k = _un_k_rows(x, leg, danch, uanch, import_c, k_shift=k_shift)
     else:
         if leg == "Thailand":
             full, own = empty, (th[th["flow"] == "X"] if th is not None else empty)
@@ -562,7 +573,7 @@ def _un_leg_rows(res, th, ck, leg, danch, uanch, import_c, book_ledger, mirror_s
             own = res[(res["rep_c"] == leg) & (res["flow"] == fo)]
         full = full[full["code_hs6"].isin(codes.BASKET) & ~full["code_hs6"].isin(codes.CHIPS)]
         own = own[own["code_hs6"].isin(codes.BASKET) & ~own["code_hs6"].isin(codes.CHIPS)].copy()
-        k = _un_k_rows(own, leg, danch, uanch, import_c)
+        k = _un_k_rows(own, leg, danch, uanch, import_c, k_shift=k_shift)
     srv = own["code_hs6"].isin(K_SERVER_CODES)
     w = k.copy()
     w[~srv] = 0.0
@@ -609,27 +620,31 @@ def _k_ai(own_srv, k):
     return float((v * kk).sum() / v.sum()) if v.sum() > 0 else np.nan
 
 
-def uniform_universe(res, k_anch=None, content_model=None, tag="headline", mirror_share=None):
+def uniform_universe(res, k_anch=None, content_model=None, tag="headline", mirror_share=None,
+                     k_shift=None):
     """Every measured book under the netting rule, plus the thin-tier re-adds, with the 2021
     history attached and padded.
 
     ``k_anch`` selects a K_BRACKET corner (band members); ``content_model`` supplies the import
     content for export books without physical fields; ``mirror_share`` overrides the Malaysia
-    deduction share. The per-book AI-window ledger lands in ``UN_LEDGER[tag]``.
+    deduction share; ``k_shift`` shifts each book's measured server k (see ``_un_k_rows``).
+    The per-book AI-window ledger lands in ``UN_LEDGER[tag]``.
     """
     ck = reexport_shares(res)
     danch, uanch = _k_anchors(k_anch)
     th = _un_thailand(res)
     import_c = _un_import_content(content_model)
     book_ledger = []
-    hist = history.history()
-    book_res = history.warm_res(res)
-    book_th = th
-    if th is not None:
-        book_th = pd.concat([th, hist[hist.rep_c.eq("Thailand")]], ignore_index=True)
-    parts = [_un_leg_rows(book_res, book_th, ck, leg, danch, uanch, import_c, book_ledger, mirror_share)
+    book_res, book_th = res, th
+    if history.ENABLED:
+        hist = history.history()
+        book_res = history.warm_res(res)
+        if th is not None:
+            book_th = pd.concat([th, hist[hist.rep_c.eq("Thailand")]], ignore_index=True)
+    parts = [_un_leg_rows(book_res, book_th, ck, leg, danch, uanch, import_c, book_ledger, mirror_share,
+                          k_shift)
              for leg in _un_legs()]
-    export_res = history.thin_res(res, books.EU_MEMBERS)
+    export_res = history.thin_res(res, books.EU_MEMBERS) if history.ENABLED else res
     cols = ["dest", "code_hs6", "period", "value_usd"]
     parts.append(rx_readd_rows(export_res, hubs=["United States"])[cols])
     parts.append(hub_x_readd_rows(export_res, "United States", US_DX_FINISHED, flow="DX")[cols])
@@ -642,7 +657,8 @@ def uniform_universe(res, k_anch=None, content_model=None, tag="headline", mirro
     fa = pd.concat(parts, ignore_index=True)
     fa["dest"] = fa["dest"].map(ledger.clean_thin)
     fa = fa.groupby(["dest", "code_hs6", "period"], as_index=False)["value_usd"].sum()
-    fa = history.pad_history(fa)
+    if history.ENABLED:
+        fa = history.pad_history(fa)
     L = pd.DataFrame(book_ledger)
     UN_LEDGER[tag] = L
     if tag == "headline":
@@ -671,14 +687,15 @@ def uniform_universe(res, k_anch=None, content_model=None, tag="headline", mirro
 
 
 def taiwan_export_by_dest(res):
-    """Taiwan's basket exports per destination x code x month, 2021 history included
-    (destinations without a canonical name keep their raw label in parentheses)."""
+    """Taiwan's basket exports per destination x code x month, 2021 history included on the
+    2021 reference (destinations without a canonical name keep their raw label in parentheses)."""
     x = res[(res["rep_c"] == "Taiwan") & (res["flow"] == "X") & res["code_hs6"].isin(codes.BASKET)].copy()
     x["dest"] = x["par_c"].where(x["par_c"].notna(), "(" + x["partner"].astype(str) + ")")
     cols = ["dest", "code_hs6", "period", "value_usd"]
-    h = history.taiwan_history().copy()
-    h["dest"] = h.partner.map(lambda s: books.CANON.get(books.NORM(s), "(" + s + ")"))
-    x = pd.concat([x[cols], h[cols]], ignore_index=True)
+    if history.ENABLED:
+        h = history.taiwan_history().copy()
+        h["dest"] = h.partner.map(lambda s: books.CANON.get(books.NORM(s), "(" + s + ")"))
+        x = pd.concat([x[cols], h[cols]], ignore_index=True)
     return x.groupby(["dest", "code_hs6", "period"], as_index=False)["value_usd"].sum()
 
 
@@ -695,4 +712,4 @@ def residual_value(res, r_code, exclude=()):
     r = _grp(r)
     r["value_usd"] = r.apply(lambda row: row["value_usd"] * r_code.get(row["code_hs6"], 1.0), axis=1)
     r = _tag(r, "(residual: no importer leg)")
-    return history.pad_history(r)
+    return history.pad_history(r) if history.ENABLED else r

@@ -21,6 +21,9 @@ shipment values (the excess is assumed to have the month's observed exporter mix
 level excesses are never summed. Exporters' physical fields cannot show whether hardware stays
 in the destination after arrival: all of it is assumed retained.
 """
+from dataclasses import dataclass, field
+from typing import Callable, Mapping, Optional
+
 import numpy as np
 import pandas as pd
 
@@ -29,6 +32,26 @@ from . import books, content, history, ledger, netting, timing
 KEYS = ["dest", "code_hs6", "period"]
 RESIDUAL = "(residual: no importer leg)"
 _SOURCE = _ROWS = None
+
+
+@dataclass(frozen=True)
+class Perturbation:
+    """Changes to the exporter classifier for one uncertainty draw or structural case.
+
+    The defaults leave the classifier unchanged. Attach one to a content model as
+    ``model.exporter_perturbation`` before the exporter evidence is built.
+
+    ``price_scale`` multiplies the ASP the unit-value ladder reads against; ``density_scale``
+    multiplies both ends of the $/kg ramp; ``category`` adds a shift per code to the observed
+    content (clipped to [0.05, 0.93]); ``transform(values, code)`` then rewrites the observed
+    847330 and 847180 readings (the structural composition cases); ``cap_at_mix`` caps the
+    unit-value ladder at the eligible system mix.
+    """
+    price_scale: float = 1.0
+    density_scale: float = 1.0
+    category: Mapping[str, float] = field(default_factory=dict)
+    transform: Optional[Callable] = None
+    cap_at_mix: bool = False
 
 
 def source_rows(res):
@@ -101,19 +124,29 @@ def classify(rows, model, rack=None):
     kok = ~qok & covk.ge(content.CELL_FIELD_MIN) & d.weight_kg.gt(0)
     d["field"] = np.select([qok, kok], ["qty", "weight_kg"], default="missing")
     d["coverage"] = np.select([qok, kok], [covq, covk], default=0.)
+    p = getattr(model, "exporter_perturbation", None) or Perturbation()
     srv = model.mix("row", rack).reindex(d.q).to_numpy()
-    asp = model.asp("row").reindex(d.q).to_numpy()
+    asp = model.asp("row").reindex(d.q).to_numpy() * p.price_scale
     if not np.isfinite(srv).all() or not np.isfinite(asp).all():
         raise ValueError("Exporter classifier lacks Epoch ASP/mix references")
     uv = np.divide(d.qty_value, d.qty, out=np.zeros(len(d)), where=d.qty.gt(0))
     uq = np.array([content._tier_content(r, s) for r, s in zip(uv / asp, srv)])
+    if p.cap_at_mix:
+        uq = np.where(np.isfinite(uq), np.minimum(uq, srv), uq)
     dens = np.divide(d.kg_value, d.weight_kg, out=np.zeros(len(d)), where=d.weight_kg.gt(0))
     board = d.code_hs6.eq("847330")
-    lo = np.where(board, content.CELL_DENS["boards"][0], content.CELL_DENS["server"][0])
-    hi = np.where(board, content.CELL_DENS["boards"][1], content.CELL_DENS["server"][1])
+    lo = np.where(board, content.CELL_DENS["boards"][0], content.CELL_DENS["server"][0]) * p.density_scale
+    hi = np.where(board, content.CELL_DENS["boards"][1], content.CELL_DENS["server"][1]) * p.density_scale
     ramp = np.clip((np.log(np.maximum(dens, 1e-9)) - np.log(lo)) / (np.log(hi) - np.log(lo)), 0, 1)
     uk = content.TIER_C["low"] + (np.where(board, content.TIER_C["board"], srv) - content.TIER_C["low"]) * ramp
     d["observed_content"] = np.select([qok, kok], [uq, uk], default=np.nan)
+    for code, delta in p.category.items():
+        mask = d.code_hs6.eq(code)
+        d.loc[mask, "observed_content"] = (d.loc[mask, "observed_content"] + delta).clip(.05, .93)
+    if p.transform is not None:
+        for code in ("847330", "847180"):
+            mask = d.code_hs6.eq(code)
+            d.loc[mask, "observed_content"] = p.transform(d.loc[mask, "observed_content"], code)
     d["observed_value"] = d.value_usd * d.coverage
     # Every counted thin destination is priced against the rest-of-world reference, so China and
     # Hong Kong rows (read against the China-specific mix) are not comparable donors.

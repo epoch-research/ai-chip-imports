@@ -14,6 +14,7 @@ authors = [{ name = "Epoch AI" }]
 dependencies = [
     "numpy>=2.0",
     "pandas>=2.2",
+    "scipy>=1.11",   # the uncertainty run's Sobol sequences and priors
     "xlrd>=2.0.1",   # Taiwan's portal exports are BIFF .xls
 ]
 

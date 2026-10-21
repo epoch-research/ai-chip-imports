@@ -26,6 +26,7 @@ import pandas as pd
 from . import baseline, books, codes, content, epoch, exporter_content, fob, history, ledger, netting, paths, timing
 
 AI_LO = codes.AI_LO
+CARVE_WINDOW = ("2023Q3", "2025Q4")     # quarters whose excess splits the 2022 carve across codes
 HEADLINE = ("indexed", "corridor")
 BAND_CONTENTS = ("mfg", "corridor", "high085")
 HIGH_SYSTEM_CONTENT = 0.85
@@ -56,14 +57,18 @@ def _complete_quarters(periods):
     return set(q[q == 3].index)
 
 
-def build_universe(res=None):
+def build_universe(res=None, index_options=None, content_model=None, mirror_share=None):
     """Everything the estimator and allocator run on.
 
     Returns a dict: ``res`` (loaded books), ``t`` and ``epoch_all`` (Epoch timelines and
     quarterly sales), ``axis`` (Epoch quarters that are complete quarters of Taiwan's export
     book), ``epoch_q``, ``bindex``, ``cmodel``, ``r_resid`` (the residual bucket's uplift),
-    ``faC_full`` (the headline universe), ``faK`` (k corners), ``faMirror`` (Malaysia endpoints).
-    Pass a loaded ``res`` to skip the reload.
+    ``residC`` (Taiwan's residual bucket), ``faC_full`` (the headline universe), ``faK`` (k
+    corners), ``faMirror`` (Malaysia endpoints). Pass a loaded ``res`` to skip the reload.
+
+    The structural cases of the uncertainty run pass ``index_options`` (keyword arguments of
+    ``baseline.BaselineIndex``), ``content_model`` (a ``content.ContentModel`` subclass) and
+    ``mirror_share`` (the headline universe's Malaysia deduction share).
     """
     if res is None:
         res = load_res()
@@ -94,13 +99,13 @@ def build_universe(res=None):
     epoch_q.attrs["incomplete_quarters"] = epoch_all.loc[epoch_all.epoch_incomplete, "quarter"].tolist()
 
     baseline.FRONTIER = res["period"].max()        # the index extensions stop where the trade data stop
-    bindex = baseline.BaselineIndex()
+    bindex = baseline.BaselineIndex(**(index_options or {}))
     thb = netting.thailand_books()
     extra = {"Thailand": thb} if thb is not None else None
-    cm = content.ContentModel(res, t, bindex=bindex, cn_excluded=netting.CN_EXCLUDED_ORIGINS,
-                         extra_books=extra)
+    cm = (content_model or content.ContentModel)(res, t, bindex=bindex, cn_excluded=netting.CN_EXCLUDED_ORIGINS,
+                                                 extra_books=extra)
     residC = netting.residual_value(res, r_resid, exclude=netting.ASSEMBLY_NODES)
-    faC = netting.uniform_universe(res, content_model=cm)
+    faC = netting.uniform_universe(res, content_model=cm, mirror_share=mirror_share)
     faC_full = pd.concat([faC, residC], ignore_index=True)
     faK = {}
     for ktag, kanch in netting.K_BRACKET.items():
@@ -129,7 +134,7 @@ def build_universe(res=None):
     if unindexed:
         raise ValueError(f"[content-model] classified pairs without their own baseline index: {unindexed}")
     return {"res": res, "t": t, "epoch_all": epoch_all, "axis": axis, "epoch_q": epoch_q,
-            "bindex": bindex, "cmodel": cm, "r_resid": r_resid,
+            "bindex": bindex, "cmodel": cm, "r_resid": r_resid, "residC": residC,
             "faC_full": faC_full, "faK": faK, "faMirror": faMirror}
 
 
@@ -145,6 +150,37 @@ def _check_history(fa):
         raise ValueError("incomplete 2021 history in the universe")
 
 
+def carve_2022(fa, epoch_all, bindex=None):
+    """The A100-era AI content of 2022, {code: $/month}, carved out of the 2022 reference.
+
+    Used only on the 2022 reference (``history.REFERENCE_YEAR``). The level is Epoch's 2022
+    sales per month, taken directly as border dollars; it is split across codes by their shares
+    of world excess over CARVE_WINDOW in a first pass without a carve, with the baseline grown by
+    ``bindex``'s world composite (weighted by ``fa``'s 2022 trade) or, without an index, at the
+    parametric rate.
+    """
+    w = fa.groupby(["code_hs6", "period"], as_index=False)["value_usd"].sum()
+    w["year"] = w["period"].str[:4]
+    base = w[w["year"] == "2022"].groupby("code_hs6").agg(mean2022=("value_usd", "mean"))
+    w = w.merge(base, on="code_hs6", how="left")
+    w["gf"] = (1.0 + w["code_hs6"].map(lambda c: codes.NONAI_GROWTH[codes.channel(c)])) ** \
+        w["period"].map(codes.years_since_mid2022)
+    if bindex is not None:
+        weights = fa[fa["period"].str[:4] == "2022"].groupby(["dest", "code_hs6"])["value_usd"].mean().to_dict()
+        for code, f in bindex.aggregate(weights).items():
+            m = (w["code_hs6"] == code).to_numpy()
+            if not m.any():
+                continue
+            ext = f.reindex(sorted(set(f.index) | set(w.loc[m, "period"]))).ffill()
+            vals = ext.reindex(w.loc[m, "period"]).to_numpy()
+            w.loc[m, "gf"] = np.where(np.isnan(vals), w.loc[m, "gf"].to_numpy(), vals)
+    w["excess"] = (w["value_usd"] - w["mean2022"].clip(lower=0.0) * w["gf"]).clip(lower=0.0)
+    calib = w[w["period"].map(codes.quarter).between(*CARVE_WINDOW)]
+    shares = calib.groupby("code_hs6")["excess"].sum().pipe(lambda s: s / s.sum()).to_dict()
+    monthly = epoch_all.loc[epoch_all["quarter"].str.startswith("2022"), "epoch_cost_usd"].sum() / 12.0
+    return {c: monthly * shares.get(c, 0.0) for c in codes.BASKET}
+
+
 def content_weights(co, cmodel, rack=None):
     """Measured content per row of the excess frame ``co``: the content model for books, the
     exporters' evidence for the thin tier."""
@@ -154,18 +190,21 @@ def content_weights(co, cmodel, rack=None):
     return exporter_content.weights(co, cmodel, w, rack=rack)
 
 
-def estimate(U, fa, bindex, full_band=True, dest_collector=None):
+def estimate(U, fa, bindex, full_band=True, dest_collector=None, weigh=None):
     """Chip dollars for universe ``fa`` under the band's baseline x content combinations.
 
     ``full_band=False`` computes the headline combination only. ``dest_collector`` (a dict)
     receives each combination's chip dollars per destination x calendar quarter, keyed
-    (baseline, content). Returns ``(headline_q, headline_co, band, headline_lag)``: the headline
-    chip dollars per quarter, its row-level excess frame (with ``chiponly_corr``), one band row
-    per combination with its median ratio to Epoch, and the headline per arrival quarter.
+    (baseline, content). ``weigh(co, cmodel)`` replaces ``content_weights`` for the measured
+    content (the uncertainty run's selection rules). Returns ``(headline_q, headline_co, band,
+    headline_lag)``: the headline chip dollars per quarter, its row-level excess frame (with
+    ``chiponly_corr``), one band row per combination with its median ratio to Epoch, and the
+    headline per arrival quarter.
     """
     cmodel, epoch_all, epoch_q = U["cmodel"], U["epoch_all"], U["epoch_q"]
     exporter_content.evidence(cmodel, U["res"])
-    _check_history(fa)
+    if history.ENABLED:
+        _check_history(fa)
     ai = [q for q in U["axis"] if q >= AI_LO]
     variants = [("indexed", bindex, 0.05)]
     if full_band:
@@ -176,12 +215,14 @@ def estimate(U, fa, bindex, full_band=True, dest_collector=None):
     headline_q = headline_co = headline_lag = None
     for vname, bidx, g in variants:
         growth = {"systems": g, "chips": min(g, codes.NONAI_GROWTH["chips"]) if g == 0 else g * 0.6}
-        co = ledger.corridor_chiponly(fa, "dest", growth=growth, baseline_index=bidx, historical=True)
+        carve = None if history.ENABLED else carve_2022(fa, epoch_all, bidx)
+        co = ledger.corridor_chiponly(fa, "dest", growth=growth, baseline_index=bidx,
+                                      historical=history.ENABLED, ai2022=carve)
         for rule in contents:
             if rule == "mfg":
                 w = co["code_hs6"].map(codes.CHIP_CONTENT).to_numpy()
             elif rule == "corridor":
-                w = content_weights(co, cmodel)
+                w = (weigh or content_weights)(co, cmodel)
             else:
                 w = np.where(co["code_hs6"].isin(codes.SERVER_CODES), HIGH_SYSTEM_CONTENT,
                              co["code_hs6"].map(codes.CHIP_CONTENT))

@@ -35,7 +35,8 @@ variant is cumulated first, then the envelope taken; not additive across models)
 variant's destination total at Epoch's 5th/95th percentiles, then the minimum and maximum across
 variants. Flows (`units`, `h100e` and `_lo`/`_hi`) and cumulative stocks (`units_cum`,
 `h100e_cum` and `_lo`/`_hi`). Rows with `dest = World` reproduce Epoch's own totals and
-percentiles. These are assumption envelopes, not probability intervals.
+percentiles. These are assumption envelopes, not probability intervals; the conditional intervals
+and the structural envelope come from the uncertainty run ([uncertainty.md](uncertainty.md)).
 
 **`gpu_country_shares`** -- every share set behind the allocation: `variant`, `in_ci` (part of
 the band), `q`, `dest`, `D_usd` (chip dollars) and `share`. The `headline|smoothshares` variant

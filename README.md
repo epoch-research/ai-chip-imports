@@ -1,15 +1,28 @@
-# AI chip imports
+# AI Chip Imports
 
-Code behind Epoch AI's [AI Chip Imports](https://epoch.ai/data/ai-chip-imports) data: estimates
-of where AI accelerators arrive, built from national customs records and Epoch AI's
-[AI Chip Sales](https://epoch.ai/data/ai-chip-sales) data.
+Code behind Epoch AI's [AI Chip Imports](https://epoch.ai/data/ai-chip-imports) explorer, which
+estimates how much AI compute arrives in each country every quarter since 2022.
 
-The pipeline isolates the AI-attributable slice of customs trade in servers and accelerator
-boards for sixteen measured destinations (and, through their exports, every other country),
-converts it into accelerator dollars, checks the total against Epoch's sales, and distributes
-Epoch's per-model sales across destinations in proportion to those dollars. The method is
-documented on the [methodology page](https://epoch.ai/data/ai-chip-imports-documentation/methodology); module docstrings give the
-details of each step.
+Almost every advanced AI chip is packaged in Taiwan, so nearly every chip crosses at least one
+border before reaching a data center, and most countries publish monthly records of what crosses
+their borders. We combine these customs records with our
+[AI Chip Sales](https://epoch.ai/data/ai-chip-sales) estimates in four steps:
+
+1. **Hardware retained in each country.** We count hardware only in the country where it stays,
+   subtracting re-exports and the imported content of servers a country assembles and ships on.
+2. **AI-related trade.** We estimate AI-related trade as the excess above a baseline built from
+   each country's 2021 trade.
+3. **Accelerator share of trade value.** We estimate how much of the remaining value is the AI
+   chip itself, rather than CPUs, memory, networking or chassis, using national tariff
+   descriptions and declared value per unit and per kilogram.
+4. **Allocation of chips to countries.** We split our chip sales estimates, by chip model and
+   quarter, across countries in proportion to their chip dollars, assuming chips arrive about two
+   months after they are sold.
+
+We collect customs data for 16 destinations with their own records; countries without one are
+estimated from what other countries declare shipping to them. The
+[methodology page](https://epoch.ai/data/ai-chip-imports-documentation/methodology) describes
+each step, and the module docstrings document how the code implements it.
 
 This repository contains code only. It does not include customs data, the scripts used to
 download it, or any outputs: obtain the inputs from their publishers, under their terms
@@ -55,19 +68,26 @@ pip install -r requirements.txt && pip install -e .
    Outputs land in `output/` as `<name>_<YYYYMMDD>.csv`; [docs/outputs.md](docs/outputs.md)
    describes each file. A full run takes a few minutes.
 
-## Configuration
+## Main assumptions
 
-| Variable | Default | Meaning |
+The adopted assumptions are constants in the modules that use them, each documented where it is
+defined. These are the ones the results depend on most, roughly in order (the methodology page's
+uncertainty section quantifies them):
+
+| Assumption | Adopted value | Where |
 |---|---|---|
-| `AI_CHIP_IMPORTS_DATA` | `./data` | input data root |
-| `AI_CHIP_IMPORTS_OUTPUT` | `./output` | output directory |
-| `AI_CHIP_IMPORTS_LAG_MONTHS` | `2` | months between a sale and the border crossing (0-6) |
-| `AI_CHIP_IMPORTS_NETTING_QUARTERS` | `2` | memory of the excess ledger, in quarters (`inf` for none) |
-| `AI_CHIP_IMPORTS_MALAYSIA_MIRROR_SHARE` | `0.5` | share of the China-Malaysia server mirror gap deducted from Malaysia |
+| Accelerator content of ambiguous trade (boards and parts in 8473.30, other units in 8471.80) | unit-value ladder and $/kg ramps, national tariff lines first | `content.py`: `LOW_MAX`…`SERVER_LO`, `CELL_DENS`, `TIER_C` |
+| Ordinary-trade baseline | 2021 trade, indexed by client IT for systems and by a non-AI-origin component index for boards | `baseline.py`, `history.py` |
+| Imported content of re-exported servers (k) | 0.10 / 0.40 / 0.90 at 250 / 600 / 2,000 $/kg | `netting.py`: `K_DENS_ANCH`, `K_UV_ANCH` |
+| Sales-to-arrival lag | 2 months | `timing.py`; `AI_CHIP_IMPORTS_LAG_MONTHS` |
+| Malaysia server-gap deduction | 50% of the China–Malaysia server mirror gap | `netting.py`; `AI_CHIP_IMPORTS_MALAYSIA_MIRROR_SHARE` |
+| China price premium on diverted chips | 1.13–2.35× by quarter from 2023Q4 | `allocator.py`: `PREMIUM_SERIES` |
+| Where captive chips (TPU, Trainium) are deployed | destination countries per chip model | `assumptions/captive_geography.csv` |
+| Netting memory | 2 quarters | `ledger.py`; `AI_CHIP_IMPORTS_NETTING_QUARTERS` |
 
-The model's assumptions are constants in the modules that use them, each documented where it
-is defined; the captive-accelerator geography is a table in
-`src/ai_chip_imports/assumptions/captive_geography.csv`.
+The three environment variables override their defaults for sensitivity runs; the defaults
+reproduce the published estimates. Two more set the paths: `AI_CHIP_IMPORTS_DATA` (input root,
+default `./data`) and `AI_CHIP_IMPORTS_OUTPUT` (default `./output`).
 
 ## Reproducibility
 
